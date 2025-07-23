@@ -1,0 +1,14 @@
+<!-- templates/control.html -->
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Animal Control Panel</title>
+</head>
+<body>
+    <h2>Manual Control Panel</h2>
+    <form method="post" action="/control">
+        <button name="pump" type="submit">{{ 'Turn Pump OFF' if pump else 'Turn Pump ON' }}</button>
+        <button name="sound" type="submit">{{ 'Turn Sound OFF' if sound else 'Turn Sound ON' }}</button>
+    </form>
+</body>
+</html>
