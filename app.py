@@ -14,7 +14,7 @@ cow_sound = pygame.mixer.Sound("animal_sounds/cow.mp3")
 elephant_sound = pygame.mixer.Sound("animal_sounds/elephant.mp3")
 
 # Load YOLO model
-model = YOLO("yolov8n.pt")
+model = YOLO("yolov8m.pt")
 
 # Connect to Arduino if available
 try:
