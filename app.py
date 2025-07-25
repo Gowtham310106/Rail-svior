@@ -9,7 +9,7 @@ from ultralytics import YOLO
 # Initialize Pygame mixer
 pygame.mixer.init()
 
-# Load deterrent sounds
+# Load deterrent animal_sounds
 cow_sound = pygame.mixer.Sound("animal_sounds/cow.mp3")
 elephant_sound = pygame.mixer.Sound("animal_sounds/elephant.mp3")
 
@@ -139,10 +139,14 @@ def detect_animals():
 
                     # Actions
                     if distance < 2000:
+                        send_to_arduino("RED", name, distance)
                         activate_pump(name, distance)
                         threading.Thread(target=play_sound, args=(name,), daemon=True).start()
                     elif distance < 5000:
+                        send_to_arduino("GREEN", name, distance)
                         threading.Thread(target=play_sound, args=(name,), daemon=True).start()
+                    else:
+                        send_to_arduino("GREEN", name, distance)
 
         frame = draw_detections(frame, detections)
         cv2.imshow("Animal Detection", frame)
