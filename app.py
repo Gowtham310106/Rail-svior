@@ -1,91 +1,160 @@
-from ultralytics import YOLO
 import cv2
-import threading
-from flask import Flask, render_template, request
-import pygame
 import time
+import json
+import threading
+import pygame
+import serial
+from ultralytics import YOLO
 
-# Initialize pygame mixer once at the start
+# Initialize Pygame mixer
 pygame.mixer.init()
+
+# Load deterrent sounds
+cow_sound = pygame.mixer.Sound("animal_sounds/cow.mp3")
+elephant_sound = pygame.mixer.Sound("animal_sounds/elephant.mp3")
 
 # Load YOLO model
 model = YOLO("yolov8n.pt")
 
-# Video file path (local video instead of ESP32-CAM)
+# Connect to Arduino if available
+try:
+    arduino = serial.Serial('COM3', 9600, timeout=1)
+    time.sleep(2)
+    print("✅ Arduino connected")
+    arduino_connected = True
+except Exception as e:
+    print(f"❌ Arduino not connected: {e}")
+    arduino_connected = False
+
+# Cooldowns
+last_sound_time = 0
+last_pump_time = 0
+sound_cooldown = 3  # sec
+pump_cooldown = 10  # sec
+
+# Video input
 VIDEO_PATH = "videos/cowvid.mp4"
 
-# Manual control flags
-pump_on = False
-sound_on = False
+def play_sound(animal):
+    global last_sound_time
+    now = time.time()
+    if now - last_sound_time < sound_cooldown:
+        print(f"🔇 Cooldown active. Sound skipped.")
+        return
+    last_sound_time = now
 
-app = Flask(__name__)
+    print(f"🔊 Playing {animal} alert")
+    if animal == "cow":
+        cow_sound.play()
+    elif animal == "elephant":
+        elephant_sound.play()
 
-@app.route('/')
-def control_page():
-    return render_template("control.html", pump=pump_on, sound=sound_on)
-
-@app.route('/control', methods=['POST'])
-def manual_control():
-    global pump_on, sound_on
-    if 'pump' in request.form:
-        pump_on = not pump_on
-    if 'sound' in request.form:
-        sound_on = not sound_on
-    return render_template("control.html", pump=pump_on, sound=sound_on)
-
-# Play sound using pygame
-def play_sound(file_path):
+def send_to_arduino(command, animal, distance):
+    if not arduino_connected:
+        print(f"[SIM] {command} for {animal} at {distance}cm")
+        return
     try:
-        pygame.mixer.music.load(file_path)
-        pygame.mixer.music.play()
-        while pygame.mixer.music.get_busy():
-            time.sleep(0.1)
+        data = {
+            'command': command,
+            'animal': animal,
+            'distance': distance,
+            'timestamp': int(time.time())
+        }
+        arduino.write((json.dumps(data) + '\n').encode())
+        print(f"📤 Sent to Arduino: {command}")
+        response = arduino.readline().decode().strip()
+        if response:
+            print(f"📥 Arduino: {response}")
     except Exception as e:
-        print(f"Error playing sound: {e}")
+        print(f"❌ Serial error: {e}")
+
+def activate_pump(animal, distance):
+    global last_pump_time
+    now = time.time()
+    if now - last_pump_time < pump_cooldown:
+        print("💧 Pump cooldown active")
+        return
+    last_pump_time = now
+    send_to_arduino("PUMP_ON", animal, distance)
+    print(f"💧 Pump activated for {animal}")
+
+def draw_detections(frame, detections):
+    for d in detections:
+        x1, y1, x2, y2 = d['bbox']
+        distance = d['distance']
+        label = f"{d['name'].upper()} {distance:.1f}cm"
+
+        color = (0, 255, 0)
+        if distance < 100:
+            color = (0, 165, 255)
+        if distance < 50:
+            color = (0, 0, 255)
+
+        cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+        cv2.putText(frame, label, (x1, y1 - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+    return frame
 
 def detect_animals():
-    global pump_on, sound_on
     cap = cv2.VideoCapture(VIDEO_PATH)
+    if not cap.isOpened():
+        print("❌ Could not open video")
+        return
+
+    print("🚀 Detection started. Press Q to quit.")
+
     while True:
         ret, frame = cap.read()
         if not ret:
-            cap.set(cv2.CAP_PROP_POS_FRAMES, 0)  # Restart video
+            cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
             continue
 
-        results = model.predict(frame, conf=0.5)
+        results = model.predict(frame, conf=0.5, verbose=False)
+        detections = []
 
         for r in results:
-            for box in r.boxes:
-                cls = int(box.cls[0])
-                name = r.names[cls]
-                x1, y1, x2, y2 = map(int, box.xyxy[0])
-                width = x2 - x1
-                distance = 1000 / width if width > 0 else 9999
+            if r.boxes is not None:
+                for box in r.boxes:
+                    cls = int(box.cls[0])
+                    name = r.names[cls]
+                    if name not in ["cow", "elephant"]:
+                        continue
+                    confidence = float(box.conf[0])
+                    x1, y1, x2, y2 = map(int, box.xyxy[0])
+                    h = y2 - y1
+                    if h <= 0:
+                        continue
 
-                if name in ["cow", "elephant"]:
-                    print(f"[ALERT] {name} detected at - {distance:.2f} cm")
+                    focal_length = 800
+                    real_height = 150 if name == "cow" else 300
+                    distance = (real_height * focal_length) / h
+                    distance = min(distance, 10000)
 
-                    if distance < 10:
-                        sound_file = None
-                        if name == "cow":
-                            sound_file = "animal_sounds/cow.mp3"
-                        elif name == "elephant":
-                            sound_file = "animal_sounds/elephant.mp3"
-                        if sound_file:
-                            threading.Thread(target=play_sound, args=(sound_file,)).start()
-                        print("Pump activated due to animal proximity")
-                        time.sleep(3)
+                    detections.append({
+                        "name": name,
+                        "confidence": confidence,
+                        "bbox": [x1, y1, x2, y2],
+                        "distance": distance
+                    })
 
-                    if pump_on:
-                        print("Manual Pump ON")
+                    # Actions
+                    if distance < 2000:
+                        activate_pump(name, distance)
+                        threading.Thread(target=play_sound, args=(name,), daemon=True).start()
+                    elif distance < 5000:
+                        threading.Thread(target=play_sound, args=(name,), daemon=True).start()
 
-                    if sound_on:
-                        threading.Thread(target=play_sound, args=("animal_sounds/cow.mp3",)).start()
+        frame = draw_detections(frame, detections)
+        cv2.imshow("Animal Detection", frame)
 
-# Start detection thread
-detect_thread = threading.Thread(target=detect_animals)
-detect_thread.daemon = True
-detect_thread.start()
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
+
+    cap.release()
+    cv2.destroyAllWindows()
+    if arduino_connected:
+        arduino.close()
+        print("🔌 Arduino disconnected")
 
 if __name__ == '__main__':
-    app.run(host="0.0.0.0", port=5000)
+    detect_animals()
