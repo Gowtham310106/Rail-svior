@@ -1,3 +1,5 @@
+# Animal Detection System - Complete Working App
+
 import cv2
 import time
 import json
@@ -9,14 +11,14 @@ from ultralytics import YOLO
 # Initialize Pygame mixer
 pygame.mixer.init()
 
-# Load deterrent animal_sounds
+# Load deterrent animal sounds
 cow_sound = pygame.mixer.Sound("animal_sounds/cow.mp3")
 elephant_sound = pygame.mixer.Sound("animal_sounds/elephant.mp3")
 
 # Load YOLO model
-model = YOLO("yolov8m.pt")
+model = YOLO("yolov8l.pt")
 
-# Connect to Arduino if available
+# Connect to Arduino
 try:
     arduino = serial.Serial('COM3', 9600, timeout=1)
     time.sleep(2)
@@ -29,8 +31,8 @@ except Exception as e:
 # Cooldowns
 last_sound_time = 0
 last_pump_time = 0
-sound_cooldown = 3  # sec
-pump_cooldown = 10  # sec
+sound_cooldown = 3  # seconds
+pump_cooldown = 10  # seconds
 
 # Video input
 VIDEO_PATH = "videos/cowvid.mp4"
@@ -137,16 +139,15 @@ def detect_animals():
                         "distance": distance
                     })
 
-                    # Actions
-                    if distance < 2000:
-                        send_to_arduino("RED", name, distance)
+                    # Action logic
+                    send_to_arduino("RED", name, distance)
+                    threading.Thread(target=play_sound, args=(name,), daemon=True).start()
+                    if distance < 3000:
                         activate_pump(name, distance)
-                        threading.Thread(target=play_sound, args=(name,), daemon=True).start()
-                    elif distance < 5000:
-                        send_to_arduino("GREEN", name, distance)
-                        threading.Thread(target=play_sound, args=(name,), daemon=True).start()
-                    else:
-                        send_to_arduino("GREEN", name, distance)
+
+        # ✅ If no animal detected
+        if len(detections) == 0:
+            send_to_arduino("GREEN", "none", 9999)
 
         frame = draw_detections(frame, detections)
         cv2.imshow("Animal Detection", frame)
